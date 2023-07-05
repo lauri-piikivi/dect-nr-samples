@@ -1,0 +1,301 @@
+/******************************************************************************
+Copyright (c) 2023  Nordic Semiconductor ASA
+SPDX-License-Identifier: BSD-3-Clause
+*******************************************************************************
+Simple test to start rx, stop, tx, and start rx again
+
+2 Development Kits for 9160 needed
+******************************************************************************/
+
+#include <string.h>
+#include <zephyr/kernel.h>
+#include <dk_buttons_and_leds.h>
+#include <nrf_modem_dect_phy.h>
+//state flags
+int INIT_DONE = 0;
+int previous_received=-1;
+int txHandle = 1;
+int rxHandle = 31400;
+int interest_handle=0;
+int EXIT =0;
+int32_t start_time;
+int32_t time_spent;
+
+//Note that the MCS impacts how much data can be fit into subslots/slots
+//this is now hardcoded assuming MCS 1
+#define MCS  1
+// tx power, 0x0b == 19 dBm
+#define POWER  0xb
+#define DATA_LEN 37
+uint8_t _txData[DATA_LEN];
+uint8_t _rxData[4];
+// scannin channels, note that channels are every 0.864MHz, so jumping 2 for 1.7MHz bandwidth
+#define START_CHAN 1657
+#define END_CHAN 1677
+// scan for carreir that has lowest in-use dbm
+int min_carrier=0;
+int min_rssi=0;
+//defining  carreir to use, selecting lowest can cause TX and RX to end up on difference channels
+#define CARRIER 1677
+
+//control that a action is completed before starting another one
+struct k_sem radio_in_use;
+
+union nrf_modem_dect_phy_phy_header phyHeader;
+struct nrf_modem_dect_phy_operation_rssi rssi_scan;
+int rx_counter=0;
+struct RX_DATA {
+  int32_t received;
+  int32_t rssi;
+} rx_data;
+#define RX_DATA_ARRAY_SIZE    16
+#define WORK_STACK          1024
+K_MSGQ_DEFINE(print_data_msgq, sizeof(rx_data), RX_DATA_ARRAY_SIZE, 8);
+
+
+#include <zephyr/logging/log.h>
+#define LOG_LEVEL CONFIG_LOG_DEFAULT_LEVEL
+LOG_MODULE_REGISTER(app);
+
+//TYPE 1 (SHORT BROADCAST) FORMAT 000
+struct phy_ctrl_field_common
+{
+    uint32_t packet_length           : 4;
+    uint32_t packet_length_type      : 1;
+    uint32_t header_format           : 3;
+    uint32_t short_network_id        : 8;
+    uint32_t transmitter_id_hi : 8;
+    uint32_t transmitter_id_lo : 8;
+    uint32_t df_mcs         : 3;
+    uint32_t reserved       : 1;
+    uint32_t transmit_power : 4;
+    uint32_t pad            : 24;
+};
+
+// Callback functions
+void initialize_cb( uint64_t const *time, int status,
+                                  struct nrf_modem_dect_phy_modem_configuration const *modem_configuration)
+{
+  time_spent =k_cycle_get_32()-start_time;
+  LOG_DBG("Init Modem status %d time taken ms %d", status, k_cyc_to_ms_ceil32(time_spent));
+  
+}
+
+void operation_complete_cb(uint64_t const *time, int status,
+                    uint32_t handle)
+{
+	LOG_DBG("%d handle: operation_complete_cb Status %d", handle, status);
+  k_sem_give(&radio_in_use);
+  if(status!=0) LOG_ERR("COMPLETE_CB ERROR handle %d status %d", handle, status);
+  if(handle==interest_handle ){
+    LOG_DBG("COMPLETE_CB ERROR Handle set as interest handle in stop failure");
+    interest_handle=0;
+  }
+  if(handle==0 ){
+    LOG_ERR("COMPLETE_CB ERROR Handle is 0");
+  }
+  
+}
+
+void operation_stop_cb(uint64_t const *time, int status,
+                uint32_t handle)
+{
+  LOG_DBG("%d handle: operation_stop_cb Status %d", handle, status);
+  if(status!=0 && status!=-22) {
+    interest_handle=handle;
+  }
+}
+
+void pcc_cb(
+  uint64_t const *time,
+  struct nrf_modem_dect_phy_rx_pcc_status const *rx_status,
+  union nrf_modem_dect_phy_phy_header const *p_phy_header)
+{
+  return;
+}
+
+void pcc_crc_failure_cb( uint64_t const *time, struct nrf_modem_dect_phy_rx_pcc_crc_failure const *crc_failure)
+{
+ return;
+}
+
+void pdc_cb(
+  uint64_t const *time,
+  struct nrf_modem_dect_phy_rx_pdc_status const *rx_status,
+  void const *p_data, uint32_t length)
+{
+  memcpy(&_rxData, p_data, 4);
+  rx_counter = (_rxData[0]<<24) + (_rxData[1]<<16) + (_rxData[2]<<8) + (_rxData[3]);
+  LOG_DBG("RECEIVED DATA, %d", rx_counter);
+  
+}
+
+void pdc_crc_failure_cb(
+  uint64_t const *time, struct nrf_modem_dect_phy_rx_pdc_crc_failure const *crc_failure)
+{
+  return;
+}
+
+void rssi_cb(
+  uint64_t const *time,
+  struct nrf_modem_dect_phy_rssi_result const *p_result)
+{
+  return;
+}
+
+void link_configuration_cb(uint64_t const *time, int status)
+{
+  return;
+}
+
+void time_query_cb(uint64_t const *time)
+{
+ return; 
+}
+
+//stop on ANY button
+void button_handler(uint32_t button_state, uint32_t has_changed)
+{
+    EXIT=1;
+}
+
+struct nrf_modem_dect_phy_client_configuration dect_cb_config = {
+  .initialize_cb = initialize_cb,
+  .operation_complete_cb = operation_complete_cb,
+  .operation_stop_cb = operation_stop_cb,
+  .pcc_cb = pcc_cb,
+  .pcc_crc_failure_cb = pcc_crc_failure_cb,
+  .pdc_cb = pdc_cb,
+  .pdc_crc_failure_cb = pdc_crc_failure_cb,
+  .rssi_cb = rssi_cb,
+  .link_configuration_cb = link_configuration_cb,
+  .time_query_cb = time_query_cb
+};
+
+void modem_rx(uint32_t rxMode)
+{
+
+  // Setup the nrf_modem_dect_phy_operation_rx
+  struct nrf_modem_dect_phy_operation_rx rxOpsParams;
+  rxOpsParams.start_time = 0;
+  rxOpsParams.handle = rxHandle;
+  rxOpsParams.mode = (nrf_modem_dect_phy_rx_mode_t)rxMode;
+  rxOpsParams.link_id = NRF_MODEM_DECT_PHY_LINK_UNSPECIFIED;
+  rxOpsParams.rssi_level = 0;
+  rxOpsParams.carrier = CARRIER;
+  //5 secs in modem clock ticks NRF_MODEM_DECT_MODEM_TIME_TICK_RATE_KHZ --> 69120*1000*5
+  rxOpsParams.duration = 345600000; 
+  rxOpsParams.filter.short_network_id = (uint8_t)(0x0a);
+  rxOpsParams.filter.is_short_network_id_used = 1;
+  rxOpsParams.filter.receiver_identity = 0;
+  if(k_sem_take(&radio_in_use, K_MSEC(10))==0){
+    int err=nrf_modem_dect_phy_schedule_rx_operation_add(&rxOpsParams);
+    LOG_DBG(" RX handle %d", rxHandle);
+    if(err!=0)LOG_ERR("ADD RX ERROR returned %d", err);
+  }
+  else {
+    LOG_ERR("RX radio in use lock not released in time");
+  }
+  rxHandle++;
+}
+
+
+void modem_tx(uint32_t i)
+{
+  
+  uint8_t tmp[DATA_LEN];
+  tmp[0] = (i >> 24) & 0xff;
+  tmp[1] = (i >> 16) & 0xff;
+  tmp[2] = (i >> 8) & 0xff;
+  tmp[3] = (i) & 0xff;
+  
+  for (int j=4;j<DATA_LEN;j++)
+  {
+    tmp[j]=0x20;
+  }   
+  //FIXME, length checks
+  memcpy(_txData, tmp, sizeof(tmp));
+  //data as TBS, FITS TO 1
+  struct phy_ctrl_field_common header = {
+      //short header format, broadcast
+      .header_format = (uint8_t)0x0,
+      //length given in subslots
+      .packet_length_type =  (uint8_t)0x0,
+      //lenght in type
+      .packet_length = (uint8_t) 0x01,
+      .short_network_id = (uint8_t)(0x0a & 0xff),
+      .transmitter_id_hi = (uint8_t) (0x0101 >> 8),
+      .transmitter_id_lo = (uint8_t) (0x0101 & 0xff),
+      // note that on the HW the maximum seems to be +19dB
+      .transmit_power = POWER,
+      .reserved = 0,
+      //lowest MCS, maximum range aimed
+      .df_mcs = MCS
+  };
+  memcpy(&phyHeader.type_1, &header, 5);
+
+  // Setup the nrf_modem_dect_phy_operation_tx
+  struct nrf_modem_dect_phy_operation_tx txOpsParams;
+  //immediate operation
+  txOpsParams.start_time = 0; 
+  txOpsParams.handle = txHandle;
+  txOpsParams.network_id = 0x0a;
+  txOpsParams.phy_type = 0;
+  txOpsParams.lbt_rssi_threshold_max = 0;
+  //  EU carrier, see ETSI TS 103 636-2 5.4.2 for the calculation 
+  txOpsParams.carrier = CARRIER;
+  //no LBT done
+  txOpsParams.lbt_period = 0;
+  txOpsParams.p_phy_header = &phyHeader;
+  txOpsParams.p_data = _txData;
+  txOpsParams.data_size = sizeof(tmp);
+
+  // and call nrf_modem_dect_phy_schedule_tx_operation_add()
+  if(k_sem_take(&radio_in_use, K_MSEC(10))==0){
+    int e=nrf_modem_dect_phy_schedule_tx_operation_add(&txOpsParams);
+    LOG_DBG("TX %d", txHandle);
+    if(e!=0) {
+      LOG_ERR("ADD TX ERROR returned %d", e);
+    }
+  }
+  else {
+    LOG_ERR("TX radio in use lock not released in time");
+  }
+  if(txHandle>30000) txHandle=1;
+  else txHandle++;
+}
+
+void main(void)
+  {
+  k_sem_init(&radio_in_use, 1, 1);
+  //send an increasing counter, start from 1 
+  uint32_t i =1;
+  // Initialize the DECT Phy, wait that it is ok to continue
+  start_time = k_cycle_get_32();
+  nrf_modem_dect_phy_initialize(&dect_cb_config);
+
+  dk_buttons_init(button_handler);
+  k_msleep(100); 
+
+  LOG_INF("Started\n");
+  while(EXIT==0){
+    int r_rx= (rand() % 10);
+    //make RX, 5 sec
+    modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_SINGLE_SHOT);
+    k_msleep(r_rx);
+    //stop rx
+    nrf_modem_dect_phy_operation_stop(rxHandle-1);
+    int burst= (rand() % 10);
+    while(burst>0){
+      modem_tx(i);
+      i++;
+      burst--;
+    }
+    if (i%100==0){
+      LOG_INF("DONE round %d last received counter %d",i, rx_counter);
+    } 
+  }
+  
+  LOG_DBG("Exit");
+}
+
