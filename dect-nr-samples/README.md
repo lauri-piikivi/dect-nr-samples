@@ -9,4 +9,5 @@ multicast allows to  record from multiple sites or multiple networks.
 UDP payload has PCC header length (5 or 10 bytes), PCC and PDC. header length is needed because both type 1 and 2 of PCC have same format 000 identifier
 
 Wireshark dissector, based on Aalto5G https://github.com/Aalto5G/DECT-NR-Wireshark-dissector/tree/main + PCC parsing added
+Edited only the dect_nr.lua for phy header parsing, rest of lua files must be copied from repo above to wireshark plugins, so overwrite the dect_nr.lua file with the file in here
 And there can be errors!
