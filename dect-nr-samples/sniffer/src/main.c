@@ -6,15 +6,17 @@ Simple sniffer, prints out messages seen on the air DECT-2020
 
 MUST CONFIGURE the newtork ID to descramble messages. default is network_id=0x12345678
 as used in dect-shell sample form nordic.
-Prepends strings with H == PCC header and length byte in HEX
-  PCC error is H00
-Prepends strings with P == PDC header and 2 length bytes in HEX
+Prepends strings with H == PCC header 
+  Type_1 (dect nr+ beacon header) 5 bytes + fileld with  0x00 to make 10 byte header
+  Type_2 (dect nr+ unicast) 10 byte header
+  PCC error is H0000
+Prepends strings with P == PDC header 
   PDC error is P0000
-these values are easy to remove from the hex strings in PC side before sending to
-wireshark or similar.
+PC python script strips the H and P identifiers, and sends the PCC+PDC as UDP payload 
+to wireshark or similar.
 ****************************************************************************
 TODO:
--
+- workerthread for printout, speed up processing
 ****************************************************************************/
 
 #include <string.h>
@@ -28,9 +30,9 @@ LOG_MODULE_REGISTER(app);
 // handle values for API calls, separate tx and rx
 int rxHandle = 31400;
 int EXIT = 0;
-uint8_t pcc_data[21];
-uint8_t pdc_data[1200];
-uint8_t hdr[10];
+uint8_t pcc_data[21] = {0};
+uint8_t pdc_data[1200] = {0}; 
+uint8_t hdr[10]={0};
 
 // Note that the MCS impacts how much data can be fit into subslots/slots
 #define MCS 1
@@ -178,15 +180,21 @@ static void on_pcc(const struct nrf_modem_dect_phy_pcc_event *evt)
     {
       sprintf(&pcc_data[i * 2], "%02X", hdr.type_1[i]);
     }
+    for (i = 5; i < 10; i++)
+    {
+      sprintf(&pcc_data[i * 2], "%02X", 0);
+    }
+    
   }
-  printk("H%02X%s\n", l, pcc_data);
+  //pcc header is always 10 bytes
+  printk("H%s\n", pcc_data);
   return;
 }
 
 /* Physical Control Channel CRC error notification. */
 static void on_pcc_crc_err(const struct nrf_modem_dect_phy_pcc_crc_failure_event *evt)
 {
-  printk("H%02X\n", 0);
+  printk("H%20X\n", 0x00);
 }
 
 /* Physical Data Channel reception notification. */
@@ -204,7 +212,7 @@ static void on_pdc(const struct nrf_modem_dect_phy_pdc_event *evt)
 /* Physical Data Channel CRC error notification. */
 static void on_pdc_crc_err(const struct nrf_modem_dect_phy_pdc_crc_failure_event *evt)
 {
-  printk("P%04X%s\n", 0);
+  printk("P%20X\n", 0x00);
 }
 
 /* RSSI measurement result notification. */
@@ -363,7 +371,9 @@ int main(void)
   while (0 == EXIT)
   {
     // loop RX mode
-    modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_CONTINUOUS, 10);
+    //modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_CONTINUOUS, 10);
+    modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_SINGLE_SHOT, 10);
+  
   }
   // messages may be in logging pipeline, wait a sec
   k_msleep(1000);
