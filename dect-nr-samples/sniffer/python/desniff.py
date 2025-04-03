@@ -93,7 +93,6 @@ def exit():
     sys.exit(1)
 
 def main():
-    
     global serial_port
     global start_time
     global sthread
