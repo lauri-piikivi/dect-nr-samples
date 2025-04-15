@@ -1,8 +1,8 @@
 -- Copyright (c) 2023 Nordic Semiconductor ASA
 --
--- SPDX-License-Identifier: BSD-3-Clause
+-- All rights reserved.
 
-DECT_NR = Proto("udp_dect_nr", "DECT NR+")
+DECT_NR = Proto("dect_nr", "DECT NR+")
 set_plugin_info({version = "0.2.1", author = "Aapo Korhonen <aapo.korhonen@nordicsemi.no>"})
 
 local wireshark_version = get_version()
@@ -698,7 +698,21 @@ f.fb_info = ProtoField.uint16("dect_nr.phf.fb_info", "Feedback info", nil, nil, 
 f.phf_padding = ProtoField.bytes("dect_nr.phf.padding", "Padding", nil, nil)
 
 -- PING PDU
-f.ping_pdu= ProtoField.bytes("nordic_ping","Nordic Ping command")
+f.ping_pdu = ProtoField.bytes("nordic_ping","Nordic Ping")
+local ping_type = {
+	[0xe4] = "Ping Request",
+	[0xe5] = "Ping Response",
+	[0xe6] = "Ping Result req",
+	[0xe7] = "Ping Result resp",
+	[0xe8] = "Ping HARQ feedback"
+}
+f.ping_type = ProtoField.uint8("nordic_ping.type", "Ping msg type", base.HEX, ping_type)
+f.ping_rssi = ProtoField.int8("nordic_ping.expected_rssi", "Exp RSSI", base.DEC)
+f.ping_transmitter_id = ProtoField.uint16("nordic_ping.transmitter_id", "Transmitter ID", base.HEX)
+f.ping_seq_num = ProtoField.uint16("nordic_ping.seq_num", "Sequence_num", base.DEC)
+f.ping_len =ProtoField.uint16("nordic_ping.length", "Length", base.DEC)
+f.ping_data = ProtoField.string("nordic_ping.data","Ping data ASCII")
+
 -- MAC PDU
 f.mac_pdu = ProtoField.bytes("dect_nr.mac", "MAC PDU")
 f.mac_hdr_vers = ProtoField.uint8("dect_nr.mac.hdr_vers", "Version", nil, nil, 0xC0)
@@ -1071,12 +1085,31 @@ function dissect_physical_header_field(buffer, dect_tree)
 	end
 end
 
+--handle first the ping
 function dissect_mac_header_type(buffer, mac_pdu_tree)
 	local ping=buffer(offset,1):uint()
-	if ping >= 0xe0 then
+	if ping >= 0xe4 then
 		local len=buffer:len()-offset
 		mac_pdu_tree:add(f.ping_pdu, buffer(offset, len))
-		offset=offset+len	
+		mac_pdu_tree:add(f.ping_type, ping)
+		offset = offset+1
+		mac_pdu_tree:add(f.ping_rssi, buffer(offset,1))
+		offset = offset+1
+		mac_pdu_tree:add(f.ping_transmitter_id, buffer(offset, 2))
+		offset = offset+2
+		if ping < 0xe7 then
+			mac_pdu_tree:add(f.ping_seq_num, buffer(offset, 2))
+			offset = offset+2
+			local lend=buffer(offset,2):uint()
+			mac_pdu_tree:add(f.ping_len, lend)
+			offset = offset+2
+			mac_pdu_tree:add(f.ping_data, buffer(offset,lend))
+			offset=offset+lend
+		elseif ping == 0xe7 then
+			local payload_asc= buffer(offset,buffer:len()-offset):string()
+			mac_pdu_tree:add(f.ping_data, payload_asc)
+			offset = buffer:len() 			
+		end	
 		return 
 	end
 
