@@ -1,6 +1,12 @@
 # dect-nr-samples
 simple sample applications for DECT NR+ on Nordic nrf91
 
+2025-04-15
+v0.9 improved sniffer, now fast enough to catch HARQ ack/nack
+- sniffer zephyr app reads network_id and carrier to use from the serial line
+- python script takes the network_id and carrier as parameters and writes to serial
+- wireshark lua dissector correctly decodes the Nordic ping command from Nordic nRF Connect SDK samples dect_shell
+  
 2025-04-03
 continued sniffer changes, improved lua dissector, tagged as 0.8 as semi stable. Works on small setups
 - dissecotr identifies nordic ping command, but does not dissect
