@@ -1,6 +1,9 @@
 # dect-nr-samples
 simple sample applications for DECT NR+ on Nordic nrf91
 
+2025-12-04
+- wireshark 4.6 includes native dect nr dissector
+  
 2025-04-15
 v0.9 improved sniffer, now fast enough to catch HARQ ack/nack
 - sniffer zephyr app reads network_id and carrier to use from the serial line
