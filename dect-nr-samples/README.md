@@ -1,6 +1,16 @@
 # dect-nr-samples
 simple sample applications for DECT NR+ on Nordic nrf91
 
+Main contents
+MAC_DEMO
+  sample how to use the MAC API in Nordic NR+ release 2.0.0 firmware. This is without IP and network management APIs to show the lowest API operation
+SNIFFER
+  capture any NR+ traffick, a python script can give the parameters and maps the NR+ traffick in UDP packet. Wireshark can show it as decode_as for the UDP port
+  
+2026-04-28
+- added the new mac_demo which is a blog entry hopefully available soon on Nordic DevZone
+- note on the sniffer,  the MAC modem side implementation in rel2.0.0 is too fast. Either the ACK/NACK or original message is shown in capture. Modem side implementation sends the ACK too fast, the sniffer operation has ended and starting new one needs to be faster. I am trying to make it from 1st reception PCC callback, where there is length, and could calculate when the PDC for that ends and start new reception on PDC_end+N but somehow this is fighting me
+
 2025-12-04
 - wireshark 4.6 includes native dect nr dissector
   
