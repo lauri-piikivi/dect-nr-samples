@@ -43,7 +43,7 @@ LOG_MODULE_REGISTER(app);
 #define MAX_WORKER_BUFS 10
 #define MAX_PACKET_LEN 600
 // handle values for API calls, separate tx and rx
-int rxHandle = 31400;
+int rxHandle = 0;
 int EXIT = 0;
 struct worker_buf {
   struct k_work work;
@@ -54,8 +54,8 @@ struct worker_buf {
 };
 //for serial printing
 uint8_t pdc_data[2*MAX_PACKET_LEN] = {0}; 
-uint16_t CARRIER=1663;
-uint32_t NETWORK_ID=0;
+uint16_t CARRIER=1659;
+uint32_t NETWORK_ID=1193046;
 
 #define UART_DEVICE DT_NODELABEL(uart0)  
 const struct device *uart_dev = DEVICE_DT_GET(UART_DEVICE);
@@ -73,6 +73,7 @@ static struct nrf_modem_dect_phy_config_params dect_phy_config_params = {
     .band_group_index = 0,
     .harq_rx_process_count = 4,
     .harq_rx_expiry_time_us = 5000000};
+static struct nrf_modem_dect_phy_rx_params rxOpsParams = {0};
 
 void work_handler(struct k_work *work)
 {
@@ -89,7 +90,7 @@ void work_handler(struct k_work *work)
   if(buf->is_pcc==false && buf->flush==false)
   {
     pdc_data[0] = 'P';
-    for (int i = 0; i <= buf->len; i++)
+    for (int i = 0; i < buf->len; i++)
     {
       sprintf(&pdc_data[1+(i*2)], "%02X", buf->rx_bytes[i]);
     }   
@@ -260,7 +261,8 @@ static void on_pcc(const struct nrf_modem_dect_phy_pcc_event *evt)
 /* Physical Control Channel CRC error notification. */
 static void on_pcc_crc_err(const struct nrf_modem_dect_phy_pcc_crc_failure_event *evt)
 {
-  printk("H%20X\n", 0x00);
+  //printk("H%20X\n", 0x00);
+  return;
 }
 
 /* Physical Data Channel reception notification. */
@@ -274,13 +276,14 @@ static void on_pdc(const struct nrf_modem_dect_phy_pdc_event *evt)
     k_work_init(&w->work, work_handler);
   	k_work_submit_to_queue(&work_q, &w->work);
   }
+  //try faster here, not from op complete callback, as that may be delayed until the whole packet is received.
   return;
 }
 
 /* Physical Data Channel CRC error notification. */
 static void on_pdc_crc_err(const struct nrf_modem_dect_phy_pdc_crc_failure_event *evt)
 {
-  printk("P%20X\n", 0x00);
+  //printk("P%20X\n", 0x00);
   return;
 }
 
@@ -361,25 +364,9 @@ static void dect_phy_event_handler(const struct nrf_modem_dect_phy_event *evt)
 }
 
 // listen, start immediately and listen for time_s duration
-void modem_rx(uint32_t rxMode, int time_s)
+void modem_rx()
 {
   // Setup the nrf_modem_dect_phy_operation_rx
-  struct nrf_modem_dect_phy_rx_params rxOpsParams = {0};
-  rxOpsParams.start_time = 0; // start immediately
-  rxOpsParams.handle = rxHandle;
-  rxOpsParams.network_id = NETWORK_ID;
-  rxOpsParams.mode = rxMode;
-  rxOpsParams.rssi_interval = NRF_MODEM_DECT_PHY_RSSI_INTERVAL_OFF;
-  rxOpsParams.link_id = NRF_MODEM_DECT_PHY_LINK_UNSPECIFIED;
-  rxOpsParams.rssi_level = 0;
-  rxOpsParams.carrier = CARRIER;
-  // modem clock ticks NRF_MODEM_DECT_MODEM_TIME_TICK_RATE_KHZ --> 69120*1000* TIME_S
-  rxOpsParams.duration = time_s * 69120 * 1000;
-  // filter on the short network id, last 8 bits of the network identifier in dect nr
-  rxOpsParams.filter.short_network_id = (uint8_t)(NETWORK_ID);
-  rxOpsParams.filter.is_short_network_id_used = 1;
-  // listen for everything 
-  rxOpsParams.filter.receiver_identity = 0;
   k_sem_take(&operation_sem, K_FOREVER);
   int err = nrf_modem_dect_phy_rx(&rxOpsParams);
   if (err != 0)
@@ -412,7 +399,7 @@ void read_serial()
     NETWORK_ID = (buf[3] << 24) | (buf[2] << 16) | (buf[1] << 8) | buf[0]; 
     CARRIER = (buf[5] << 8) | buf[4];
     
-    printk("configured NETWORK_ID 0x%X CARRIER %d\n", NETWORK_ID, CARRIER);
+    printk("configured NETWORK_ID %u CARRIER %d\n", NETWORK_ID, CARRIER);
     
   }
   return;
@@ -479,11 +466,28 @@ int main(void)
   }
   printk("DECT sniffer listening on channel %d\n", CARRIER);
 
+  rxOpsParams.start_time = 0; // start immediately
+  rxOpsParams.handle = rxHandle;
+  rxOpsParams.network_id = NETWORK_ID;
+  //rxOpsParams.mode = NRF_MODEM_DECT_PHY_RX_MODE_CONTINUOUS;
+  rxOpsParams.mode = NRF_MODEM_DECT_PHY_RX_MODE_SINGLE_SHOT;
+  rxOpsParams.rssi_interval = NRF_MODEM_DECT_PHY_RSSI_INTERVAL_OFF;
+  rxOpsParams.link_id = NRF_MODEM_DECT_PHY_LINK_UNSPECIFIED;
+  rxOpsParams.rssi_level = 0;
+  rxOpsParams.carrier = CARRIER;
+  // modem clock ticks NRF_MODEM_DECT_MODEM_TIME_TICK_RATE_KHZ --> 69120*1000* TIME_S
+  rxOpsParams.duration = 10 * 69120 * 1000;
+  // filter on the short network id, last 8 bits of the network identifier in dect nr
+  rxOpsParams.filter.short_network_id = (uint8_t)(NETWORK_ID);
+  rxOpsParams.filter.is_short_network_id_used = 0;
+  rxOpsParams.filter.receiver_identity = 0;
+  
+  // listen for everything 
   while (0 == EXIT)
   {
     // loop RX mode
-    //modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_CONTINUOUS, 10);
-    modem_rx(NRF_MODEM_DECT_PHY_RX_MODE_SINGLE_SHOT, 10);
+    rxOpsParams.handle = (rxHandle++)& 0x0FFFFFFF;
+    modem_rx();
   
   }
   // messages may be in logging pipeline, wait a sec
