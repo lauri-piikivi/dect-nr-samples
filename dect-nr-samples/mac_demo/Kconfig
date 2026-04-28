@@ -1,0 +1,48 @@
+config APP_FIXED_CHANNEL
+	int "Fixed channel for FT beaconing and PT scanning (0=disabled)"
+	default 0
+	help
+	  If set to non-zero, FT will beacon on this channel and PT will scan only this channel.
+	  If 0 (default), FT performs RSSI scan over all Band 1 channels and PT dynamically scans.
+
+config APP_NETWORK_ID
+	int "Network ID"
+	range 1 4294967295
+	default 1193046
+
+config APP_MCS
+	int "Modulation coding scheme"
+	default 0
+
+config APP_TX_POWER
+	int "TX power"
+	range 0 14
+	default 14
+
+config APP_DEFAULT_PT_SCAN_TIME_PER_CHANNEL_MS
+	int "Default PT scan time per channel in milliseconds"
+	range 100 60000
+	default 1000
+
+config APP_DEFAULT_FT_PERIOD_MS
+	int "Default FT cluster beacon period in milliseconds"
+	range 50 32000
+	default 1000
+
+config APP_DEFAULT_NW_BEACON_PERIOD_MS
+	int "Default FT network beacon period in milliseconds"
+	range 50 4000
+	default 4000
+
+config APP_RX_EXPECTED_RSSI
+	int "Expected RSSI level for reception"
+	range -80 -20
+	default -60
+
+module = MAC_DEMO
+module-str = DECT MAC Demo
+source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
+
+menu "Zephyr Kernel"
+source "Kconfig.zephyr"
+endmenu
