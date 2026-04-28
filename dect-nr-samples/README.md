@@ -1,12 +1,13 @@
 # dect-nr-samples
 simple sample applications for DECT NR+ on Nordic nrf91
 
-##Main contents
+## Main contents
 
-###MAC_DEMO
+### MAC_DEMO
 
   sample how to use the MAC API in Nordic NR+ release 2.0.0 firmware. This is without IP and network management APIs to show the lowest API operation
-###SNIFFER
+
+### SNIFFER
 
   capture any NR+ traffick, a python script can give the parameters and maps the NR+ traffick in UDP packet. Wireshark can show it as decode_as for the UDP port
   
